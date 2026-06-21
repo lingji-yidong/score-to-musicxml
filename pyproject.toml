@@ -1,0 +1,56 @@
+[project]
+name = "score-to-musicxml"
+version = "0.1.0"
+description = "A lightweight PDF wrapper for homr."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = "AGPL-3.0-only"
+dependencies = [
+    # Pin the exact PoC engine revision. HOMR 0.6.2 disables slur/tie output.
+    "homr @ git+https://github.com/liebharc/homr.git@6530038",
+    # Cross-platform release for Intel/Apple Silicon macOS and x86_64/ARM64 Linux.
+    "onnxruntime==1.23.2",
+    "pymupdf>=1.26,<2",
+]
+
+[tool.uv]
+package = false
+# Upstream currently declares >=1.24.1, although this HOMR revision runs with
+# 1.23.2. Override it to retain a single reproducible cross-platform version;
+# newer releases no longer provide an Intel macOS wheel.
+override-dependencies = ["onnxruntime==1.23.2"]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.15,<2",
+    "pytest>=8.3,<9",
+    "ruff>=0.11,<1",
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["convert_score.py", "tests"]
+
+[[tool.mypy.overrides]]
+module = "pymupdf"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["A", "B", "C4", "E", "F", "I", "PIE", "PL", "RUF", "S", "UP"]
+ignore = [
+    "PLR2004", # Small numeric constants are clearer inline in validation code.
+    "S603", # subprocess receives a fixed argv list and never invokes a shell.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]

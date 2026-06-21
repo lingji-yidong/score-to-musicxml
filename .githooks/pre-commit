@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+repository_root=$(git rev-parse --show-toplevel)
+cd "$repository_root"
+
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$repository_root/.uv-cache}"
+
+uv run --frozen ruff format .
+uv run --frozen ruff check --fix .
+
+if ! git diff --quiet -- '*.py'; then
+    echo "Ruff updated Python files. Review and stage the fixes, then commit again." >&2
+    exit 1
+fi
+
+uv run --frozen ruff check .
