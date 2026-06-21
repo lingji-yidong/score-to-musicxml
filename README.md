@@ -55,3 +55,10 @@ See [CITATIONS.md](CITATIONS.md) for upstream projects and licenses.
 ## License
 
 [GNU Affero General Public License v3.0](LICENSE), following homr upstream.
+
+## Thanks
+
+This project builds upon previous work, including:
+
+- The Optical Music Recognition pipeline of [HOMR](https://github.com/liebharc/homr)
+- The PDF rendering library [PyMuPDF](https://github.com/pymupdf/PyMuPDF)
