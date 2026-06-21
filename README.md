@@ -10,7 +10,6 @@ Install [uv](https://docs.astral.sh/uv/), then run:
 ```bash
 uv sync
 chmod +x convert_score.sh
-./scripts/install-git-hooks.sh
 ```
 
 Python 3.11 is selected automatically. The lockfile supports Intel and Apple
