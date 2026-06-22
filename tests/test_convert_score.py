@@ -9,6 +9,7 @@ import pytest
 from convert_score import (
     ConversionError,
     ScoreMetadata,
+    apply_playback_tempo,
     apply_score_metadata,
     composer_from_homr_title,
     detect_score_metadata,
@@ -206,6 +207,39 @@ def test_apply_score_metadata_preserves_encoding_information() -> None:
         root.findtext("./identification/creator[@type='composer']") == "Yukiko Isomura"
     )
     assert root.findtext("./identification/encoding/software") == "homr"
+
+
+def test_apply_playback_tempo_replaces_homr_default_at_score_start() -> None:
+    """Make the explicit playback tempo override an existing default."""
+    root = ET.fromstring(  # noqa: S314
+        """<score-partwise><part id="P1"><measure number="1">
+        <attributes><divisions>1</divisions></attributes>
+        <direction><sound tempo="120"/></direction>
+        <note><rest/><duration>1</duration></note>
+        </measure></part></score-partwise>"""
+    )
+
+    apply_playback_tempo(root, 193)
+
+    assert root.find("./part/measure/direction/sound").get("tempo") == "193"  # type: ignore[union-attr]
+    assert len(root.findall("./part/measure/direction")) == 1
+
+
+def test_apply_playback_tempo_adds_sound_without_metronome() -> None:
+    """Add playback tempo when homr omitted the whole direction."""
+    root = ET.fromstring(  # noqa: S314
+        """<score-partwise><part id="P1"><measure number="1">
+        <attributes><divisions>1</divisions></attributes>
+        <note><rest/><duration>1</duration></note>
+        </measure></part></score-partwise>"""
+    )
+
+    apply_playback_tempo(root, 193)
+
+    measure = root.find("./part/measure")
+    assert measure is not None
+    assert [child.tag for child in measure] == ["attributes", "direction", "note"]
+    assert measure.find("./direction/sound").get("tempo") == "193"  # type: ignore[union-attr]
 
 
 def test_composer_from_homr_title_recovers_composer_credit() -> None:

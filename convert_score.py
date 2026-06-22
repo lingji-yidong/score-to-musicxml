@@ -571,10 +571,41 @@ def normalize_musicxml_timing(root: ET.Element) -> tuple[int, int]:
     return reordered_measures, irregular_measures
 
 
+def apply_playback_tempo(root: ET.Element, tempo: int) -> None:
+    """
+    Set the playback tempo at the start of the score.
+
+    homr only emits a ``sound`` element when a visible metronome marking is
+    also requested. Preserve any direction content it generated while ensuring
+    that the explicit ``--tempo`` value controls playback on its own.
+    """
+    first_measure = root.find("./part/measure")
+    if first_measure is None:
+        raise ConversionError("MusicXML does not contain a first measure")
+
+    existing_sound = first_measure.find("./direction/sound")
+    if existing_sound is not None:
+        existing_sound.set("tempo", str(tempo))
+        return
+
+    direction = ET.Element("direction", {"placement": "above"})
+    ET.SubElement(direction, "sound", {"tempo": str(tempo)})
+    insertion_index = next(
+        (
+            index
+            for index, child in enumerate(first_measure)
+            if child.tag not in {"attributes", "print"}
+        ),
+        len(first_measure),
+    )
+    first_measure.insert(insertion_index, direction)
+
+
 def merge_musicxml_pages(  # noqa: PLR0912
     page_paths: list[Path],
     output_path: Path,
     metadata: ScoreMetadata | None = None,
+    tempo: int | None = None,
 ) -> None:
     """
     Merge page-level MusicXML without rewriting musical events.
@@ -640,6 +671,9 @@ def merge_musicxml_pages(  # noqa: PLR0912
         )
         apply_score_metadata(root, resolved_metadata)
 
+    if tempo is not None:
+        apply_playback_tempo(root, tempo)
+
     ET.indent(tree, space="  ")
     tree.write(output_path, encoding="utf-8", xml_declaration=True)
 
@@ -683,6 +717,7 @@ def convert_pdf(args: argparse.Namespace) -> Path:
             page_outputs,
             temporary_output,
             metadata=score_metadata,
+            tempo=args.tempo,
         )
         os.replace(temporary_output, output_path)
 

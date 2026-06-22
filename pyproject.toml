@@ -6,19 +6,28 @@ readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = "AGPL-3.0-only"
 dependencies = [
-    # Pin the exact PoC engine revision. HOMR 0.6.2 disables slur/tie output.
+    # Pin the exact PoC engine revision. homr 0.6.2 disables slur/tie output.
     "homr @ git+https://github.com/liebharc/homr.git@6530038",
     # Cross-platform release for Intel/Apple Silicon macOS and x86_64/ARM64 Linux.
     "onnxruntime==1.23.2",
+    # Use the non-GUI build in desktop and container environments.
+    "opencv-python-headless==4.13.0.92",
     "pymupdf>=1.26,<2",
 ]
 
 [tool.uv]
 package = false
-# Upstream currently declares >=1.24.1, although this HOMR revision runs with
+# Upstream currently declares >=1.24.1, although this homr revision runs with
 # 1.23.2. Override it to retain a single reproducible cross-platform version;
 # newer releases no longer provide an Intel macOS wheel.
-override-dependencies = ["onnxruntime==1.23.2"]
+#
+# RapidOCR imports only the cv2 module used by both OpenCV distributions. Its
+# metadata requires the GUI build, so disable that transitive requirement and
+# provide the headless build explicitly above to avoid conflicting cv2 files.
+override-dependencies = [
+    "onnxruntime==1.23.2",
+    "opencv-python; sys_platform == 'never'",
+]
 
 [dependency-groups]
 dev = [
