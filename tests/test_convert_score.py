@@ -20,6 +20,7 @@ from convert_score import (
     normalize_slur_numbers,
     remove_spurious_page_break_measures,
     render_pdf_pages,
+    tempo_from_text,
     validate_matching_parts,
 )
 
@@ -88,7 +89,7 @@ def test_ensure_staves_declarations_adds_grand_staff_count(tmp_path: Path) -> No
 def test_merge_musicxml_pages_preserves_notes_ties_and_slurs(
     tmp_path: Path,
 ) -> None:
-    """Append pages without removing HOMR's grace notes, ties, or slurs."""
+    """Append pages without removing homr's grace notes, ties, or slurs."""
     first_page = tmp_path / "page-001.musicxml"
     second_page = tmp_path / "page-002.musicxml"
     output = tmp_path / "combined.musicxml"
@@ -144,7 +145,7 @@ def test_detect_score_metadata_uses_filename_when_pdf_metadata_is_generic(
     tmp_path: Path,
 ) -> None:
     """Infer title and composer from a conventional score filename."""
-    pdf_path = tmp_path / "Street Where Wind Resides - Yukiko Isomura.pdf"
+    pdf_path = tmp_path / "Example Nocturne - Example Composer.pdf"
     document = pymupdf.open()  # type: ignore[no-untyped-call]
     document.new_page()
     document.set_metadata({"title": "Document", "author": ""})
@@ -154,8 +155,8 @@ def test_detect_score_metadata_uses_filename_when_pdf_metadata_is_generic(
     metadata = detect_score_metadata(pdf_path)
 
     assert metadata == ScoreMetadata(
-        title="Street Where Wind Resides",
-        composer="Yukiko Isomura",
+        title="Example Nocturne",
+        composer="Example Composer",
     )
 
 
@@ -163,7 +164,7 @@ def test_detect_score_metadata_removes_date_prefix_and_ignores_photo_title(
     tmp_path: Path,
 ) -> None:
     """Prefer a clean filename over generic scanner metadata."""
-    pdf_path = tmp_path / "20260214-Blue Valentine.pdf"
+    pdf_path = tmp_path / "20260214-Example Ballad.pdf"
     document = pymupdf.open()  # type: ignore[no-untyped-call]
     document.new_page()
     document.set_metadata({"title": "Photo", "author": ""})
@@ -172,14 +173,14 @@ def test_detect_score_metadata_removes_date_prefix_and_ignores_photo_title(
 
     metadata = detect_score_metadata(pdf_path)
 
-    assert metadata == ScoreMetadata(title="Blue Valentine")
+    assert metadata == ScoreMetadata(title="Example Ballad")
 
 
 def test_detect_score_metadata_ignores_mymusicsheet_library_title(
     tmp_path: Path,
 ) -> None:
     """Prefer the score filename over a website export placeholder."""
-    pdf_path = tmp_path / "Guitar, Loneliness and Blue Planet.pdf"
+    pdf_path = tmp_path / "Example Piano Arrangement.pdf"
     document = pymupdf.open()  # type: ignore[no-untyped-call]
     document.new_page()
     document.set_metadata({"title": "MyMusicSheet > Library", "author": ""})
@@ -188,11 +189,11 @@ def test_detect_score_metadata_ignores_mymusicsheet_library_title(
 
     metadata = detect_score_metadata(pdf_path)
 
-    assert metadata == ScoreMetadata(title="Guitar, Loneliness and Blue Planet")
+    assert metadata == ScoreMetadata(title="Example Piano Arrangement")
 
 
 def test_apply_score_metadata_preserves_encoding_information() -> None:
-    """Add title and composer while retaining HOMR identification details."""
+    """Add title and composer while retaining homr identification details."""
     root = ET.fromstring(  # noqa: S314
         """<score-partwise><work><work-title/></work>
         <identification><encoding><software>homr</software></encoding></identification>
@@ -201,12 +202,13 @@ def test_apply_score_metadata_preserves_encoding_information() -> None:
 
     apply_score_metadata(
         root,
-        ScoreMetadata(title="Wind Street", composer="Yukiko Isomura"),
+        ScoreMetadata(title="Example Suite", composer="Example Composer"),
     )
 
-    assert root.findtext("./work/work-title") == "Wind Street"
+    assert root.findtext("./work/work-title") == "Example Suite"
     assert (
-        root.findtext("./identification/creator[@type='composer']") == "Yukiko Isomura"
+        root.findtext("./identification/creator[@type='composer']")
+        == "Example Composer"
     )
     assert root.findtext("./identification/encoding/software") == "homr"
 
@@ -244,8 +246,21 @@ def test_apply_playback_tempo_adds_sound_without_metronome() -> None:
     assert measure.find("./direction/sound").get("tempo") == "193"  # type: ignore[union-attr]
 
 
+def test_tempo_from_text_detects_metronome_equals() -> None:
+    """Read common OCR and PDF text forms of a printed tempo mark."""
+    assert tempo_from_text("\ueca5 = 193") == 193
+    assert tempo_from_text("quarter =138") == 138
+    assert tempo_from_text("without tempo") is None
+
+
+def test_tempo_from_text_rejects_implausible_values() -> None:
+    """Avoid treating unrelated small or huge numbers as tempo values."""
+    assert tempo_from_text("= 8") is None
+    assert tempo_from_text("= 999") is None
+
+
 def test_composer_from_homr_title_recovers_composer_credit() -> None:
-    """Interpret HOMR's compact composer credit without using it as a title."""
+    """Interpret homr's compact composer credit without using it as a title."""
     root = ET.fromstring(  # noqa: S314
         "<score-partwise><work><work-title>Composedby otoha</work-title></work>"
         "</score-partwise>"
@@ -388,6 +403,36 @@ def test_remove_spurious_page_break_measures_drops_guitar_fragment() -> None:
     assert removed == 1
     assert [measure.get("number") for measure in measures] == ["149", "151"]
     assert measures[1].find("./print[@new-system='yes']") is not None
+
+
+def test_remove_spurious_page_break_measures_drops_page_leading_rest() -> None:
+    """Remove a false final-bar rest before the real page-leading key change."""
+    root = ET.fromstring(  # noqa: S314
+        """<score-partwise><part id="P1">
+        <measure number="104">
+        <note><pitch><step>C</step><octave>4</octave></pitch>
+        <duration>8</duration><voice>1</voice><staff>1</staff></note>
+        </measure>
+        <measure number="105" implicit="yes">
+        <print new-system="yes"/>
+        <attributes><key><fifths>0</fifths></key></attributes>
+        <note><rest/><duration>2</duration><voice>1</voice><staff>1</staff></note>
+        <barline location="right"><bar-style>heavy-heavy</bar-style></barline>
+        </measure>
+        <measure number="106">
+        <attributes><key><fifths>3</fifths></key></attributes>
+        <note><pitch><step>G</step><octave>4</octave></pitch>
+        <duration>8</duration><voice>1</voice><staff>1</staff></note>
+        </measure>
+        </part></score-partwise>"""
+    )
+
+    removed = remove_spurious_page_break_measures(root)
+
+    measures = root.findall("./part/measure")
+    assert removed == 1
+    assert [measure.get("number") for measure in measures] == ["104", "106"]
+    assert measures[1].findtext("./attributes/key/fifths") == "3"
 
 
 def test_normalize_slur_numbers_renumbers_nested_same_staff_slurs() -> None:

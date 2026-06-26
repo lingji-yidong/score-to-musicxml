@@ -1,8 +1,9 @@
-"""Convert a PDF score to one MusicXML file with HOMR."""
+"""Convert a PDF score to one MusicXML file with homr."""
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import re
 import shutil
@@ -14,13 +15,17 @@ from copy import deepcopy
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pymupdf
 
 DEFAULT_DPI = 300
 DEFAULT_HOMR_REPO = Path(__file__).resolve().parent.parent / "homr"
 LOW_INK_WHITE_RATIO = 0.995
+MIN_TEMPO = 20
+MAX_TEMPO = 300
+TEMPO_OCR_DPI = 360
+TEMPO_OCR_CROP = (0.06, 0.15, 0.35, 0.27)
 GENERIC_PDF_TITLES = {
     "document",
     "image",
@@ -90,7 +95,7 @@ def detect_score_metadata(pdf_path: Path) -> ScoreMetadata:
 
     PDF metadata is preferred when it contains real values. The filename
     fallback is deterministic and avoids adding another OCR pass on top of
-    HOMR's own title recognition.
+    homr's own title recognition.
     """
     filename_metadata = metadata_from_filename(pdf_path)
     try:
@@ -105,6 +110,80 @@ def detect_score_metadata(pdf_path: Path) -> ScoreMetadata:
         composer=meaningful_metadata_value(pdf_metadata.get("author"))
         or filename_metadata.composer,
     )
+
+
+def tempo_from_text(text: str) -> int | None:
+    """Extract a plausible metronome number from text near an equals sign."""
+    for match in re.finditer(r"[=\uff1d]\s*(\d{2,3})", text):
+        tempo = int(match.group(1))
+        if MIN_TEMPO <= tempo <= MAX_TEMPO:
+            return tempo
+    return None
+
+
+def tempo_from_pdf_text(pdf_path: Path) -> int | None:
+    """Detect tempo from an embedded PDF text layer when one is available."""
+    try:
+        with pymupdf.open(pdf_path) as document:  # type: ignore[no-untyped-call]
+            for page in document:
+                tempo = tempo_from_text(page.get_text("text"))
+                if tempo is not None:
+                    return tempo
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return None
+
+
+def tempo_from_first_page_ocr(pdf_path: Path) -> int | None:
+    """
+    Detect tempo from the first page's opening metronome-marking area.
+
+    Many scanned scores have no usable text layer. OCR only a narrow upper-left
+    crop so page numbers, lyrics, and copyright text are unlikely to masquerade
+    as a metronome marking.
+    """
+    try:
+        rapidocr_module = importlib.import_module("rapidocr")
+        rapid_ocr_class = cast(Any, rapidocr_module).RapidOCR
+    except (ImportError, AttributeError):
+        return None
+
+    try:
+        with pymupdf.open(pdf_path) as document:  # type: ignore[no-untyped-call]
+            if document.page_count == 0:
+                return None
+            page = document[0]
+            left, top, right, bottom = TEMPO_OCR_CROP
+            clip = pymupdf.Rect(  # type: ignore[no-untyped-call]
+                page.rect.width * left,
+                page.rect.height * top,
+                page.rect.width * right,
+                page.rect.height * bottom,
+            )
+            matrix = pymupdf.Matrix(  # type: ignore[no-untyped-call]
+                TEMPO_OCR_DPI / 72,
+                TEMPO_OCR_DPI / 72,
+            )
+            pixmap = page.get_pixmap(
+                matrix=matrix,
+                alpha=False,
+                clip=clip,
+            )
+            with tempfile.NamedTemporaryFile(suffix=".png") as image_file:
+                pixmap.save(image_file.name)
+                result = rapid_ocr_class()(image_file.name)
+    except (OSError, RuntimeError, ValueError, IndexError):
+        return None
+
+    texts = getattr(result, "txts", None)
+    if texts is None:
+        return None
+    return tempo_from_text(" ".join(str(text) for text in texts))
+
+
+def detect_score_tempo(pdf_path: Path) -> int | None:
+    """Detect a printed opening tempo marking from PDF text or first-page OCR."""
+    return tempo_from_pdf_text(pdf_path) or tempo_from_first_page_ocr(pdf_path)
 
 
 def apply_score_metadata(root: ET.Element, metadata: ScoreMetadata) -> None:
@@ -144,7 +223,7 @@ def apply_score_metadata(root: ET.Element, metadata: ScoreMetadata) -> None:
 
 
 def composer_from_homr_title(root: ET.Element) -> str | None:
-    """Recover a composer when HOMR placed a credit in the title field."""
+    """Recover a composer when homr placed a credit in the title field."""
     homr_title = root.findtext("./work/work-title")
     if not homr_title:
         return None
@@ -156,7 +235,7 @@ def composer_from_homr_title(root: ET.Element) -> str | None:
 
 def render_pdf_pages(pdf_path: Path, output_dir: Path, dpi: int) -> list[Path]:
     """
-    Render a PDF to deterministically named PNG files accepted by HOMR.
+    Render a PDF to deterministically named PNG files accepted by homr.
 
     This intentionally follows the PoC path: PyMuPDF Matrix scaling rather than
     changing the OCR pipeline or post-processing page images.
@@ -202,7 +281,7 @@ def render_pdf_pages(pdf_path: Path, output_dir: Path, dpi: int) -> list[Path]:
 
 def find_homr_repo() -> Path | None:
     """
-    Return a local HOMR checkout, matching the PoC lookup strategy.
+    Return a local homr checkout, matching the PoC lookup strategy.
 
     The ``HOMR_REPO`` environment variable wins. If it is not set, the wrapper
     looks for a sibling checkout at ``../homr`` relative to this file.
@@ -227,10 +306,10 @@ def find_homr_repo() -> Path | None:
 
 def homr_command() -> list[str]:
     """
-    Build the HOMR command exactly like the PoC.
+    Build the homr command exactly like the PoC.
 
     Prefer the installed ``homr`` executable. If it is unavailable, fall back to
-    ``uvx`` and use a local HOMR checkout when available.
+    ``uvx`` and use a local homr checkout when available.
     """
     installed_homr = shutil.which("homr")
     if installed_homr:
@@ -240,12 +319,12 @@ def homr_command() -> list[str]:
     if installed_uvx:
         local_repo = find_homr_repo()
         if local_repo is not None:
-            log(f"Using local HOMR checkout: {local_repo}")
+            log(f"Using local homr checkout: {local_repo}")
             return [installed_uvx, "--from", str(local_repo), "homr"]
         return [installed_uvx, "homr"]
 
     raise ConversionError(
-        "HOMR is unavailable. Install HOMR, install uv, or set HOMR_REPO."
+        "homr is unavailable. Install homr, install uv, or set HOMR_REPO."
     )
 
 
@@ -253,7 +332,7 @@ def is_low_ink_page(page_path: Path) -> bool:
     """
     Return whether an image is effectively a blank/non-score page.
 
-    A page is skipped only after HOMR fails and at least 99.5% of its pixels
+    A page is skipped only after homr fails and at least 99.5% of its pixels
     share a near-white color. This avoids rejecting ordinary sparse score pages.
     """
     pixmap = pymupdf.Pixmap(page_path)  # type: ignore[no-untyped-call]
@@ -274,14 +353,14 @@ def run_homr(  # noqa: PLR0912, PLR0913
     tempo: int | None,
 ) -> list[Path]:
     """
-    Run HOMR's CLI on all rendered pages in one directory-mode process.
+    Run homr's CLI on all rendered pages in one directory-mode process.
 
     The command resolution deliberately mirrors the PoC instead of calling
     ``sys.executable -m homr.main``. That avoids accidentally using a different
-    Python environment, HOMR version, or model setup.
+    Python environment, homr version, or model setup.
     """
     if not page_paths:
-        raise ConversionError("No rendered pages were provided to HOMR")
+        raise ConversionError("No rendered pages were provided to homr")
 
     command = [*homr_command(), str(page_paths[0].parent)]
     if gpu != "auto":
@@ -297,11 +376,11 @@ def run_homr(  # noqa: PLR0912, PLR0913
     if tempo is not None:
         command.extend(["--output-tempo", str(tempo)])
 
-    log(f"Running HOMR on {page_paths[0].parent}...")
+    log(f"Running homr on {page_paths[0].parent}...")
     try:
         subprocess.run(command, check=True)
     except subprocess.CalledProcessError as error:
-        raise ConversionError(f"HOMR exited with status {error.returncode}") from error
+        raise ConversionError(f"homr exited with status {error.returncode}") from error
 
     outputs: list[Path] = []
     missing: list[str] = []
@@ -310,14 +389,14 @@ def run_homr(  # noqa: PLR0912, PLR0913
         if output_path.is_file():
             outputs.append(output_path)
         elif is_low_ink_page(page_path):
-            log(f"Skipping low-ink page with no HOMR output: {page_path.name}")
+            log(f"Skipping low-ink page with no homr output: {page_path.name}")
         else:
             missing.append(output_path.name)
 
     if missing:
-        raise ConversionError(f"HOMR did not produce output for: {', '.join(missing)}")
+        raise ConversionError(f"homr did not produce output for: {', '.join(missing)}")
     if not outputs:
-        raise ConversionError("HOMR did not produce any MusicXML pages")
+        raise ConversionError("homr did not produce any MusicXML pages")
     return outputs
 
 
@@ -351,7 +430,7 @@ def validate_matching_parts(page_paths: list[Path]) -> None:
 
 def ensure_staves_declarations(root: ET.Element) -> int:
     """
-    Add missing ``staves`` declarations for HOMR grand-staff output.
+    Add missing ``staves`` declarations for homr grand-staff output.
 
     Some notation programs need this declaration when notes explicitly refer to
     staff 2. No notes, rests, voices, durations, ties, or slurs are changed.
@@ -466,6 +545,53 @@ def is_staff_rest_only(measure: ET.Element, staff_number: str) -> bool:
     )
 
 
+def measure_has_single_rest(measure: ET.Element) -> bool:
+    """Return whether a measure contains only one rest note."""
+    notes = measure.findall("./note")
+    return len(notes) == 1 and notes[0].find("./rest") is not None
+
+
+def measure_key_fifths(measure: ET.Element) -> str | None:
+    """Return the measure's key signature fifths value when present."""
+    return measure.findtext("./attributes/key/fifths")
+
+
+def is_section_bridge_fragment(
+    previous_measure: ET.Element,
+    measure: ET.Element,
+    next_measure: ET.Element,
+) -> bool:
+    """Identify a false section-bridge system inserted before a new page."""
+    section_bar_styles = {"light-light", "light-heavy", "heavy-heavy"}
+    return (
+        next_measure.find("./print[@new-system='yes']") is not None
+        and measure.find("./print") is None
+        and measure.find("./attributes/key") is not None
+        and next_measure.find("./attributes/key") is not None
+        and right_bar_style(previous_measure) in section_bar_styles
+        and right_bar_style(measure) in section_bar_styles
+        and is_staff_rest_only(measure, "2")
+    )
+
+
+def is_page_leading_rest_fragment(
+    measure: ET.Element,
+    next_measure: ET.Element,
+) -> bool:
+    """Identify a false page-leading rest emitted before the real first system."""
+    final_bar_styles = {"light-heavy", "heavy-heavy"}
+    measure_key = measure_key_fifths(measure)
+    next_key = measure_key_fifths(next_measure)
+    return (
+        measure.find("./print[@new-system='yes']") is not None
+        and measure_key is not None
+        and next_key is not None
+        and measure_key != next_key
+        and right_bar_style(measure) in final_bar_styles
+        and measure_has_single_rest(measure)
+    )
+
+
 def free_slur_number(active_numbers: set[str]) -> str | None:
     """Return an available MusicXML slur number."""
     for number in range(1, 7):
@@ -477,10 +603,10 @@ def free_slur_number(active_numbers: set[str]) -> str | None:
 
 def normalize_slur_numbers(root: ET.Element) -> int:
     """
-    Renumber nested slurs that HOMR emits with the same MusicXML number.
+    Renumber nested slurs that homr emits with the same MusicXML number.
 
     MusicXML renderers use the ``number`` attribute to pair simultaneous slurs.
-    HOMR often emits nested phrase and local slurs as ``number="1"`` on the
+    homr often emits nested phrase and local slurs as ``number="1"`` on the
     same staff, so a renderer may drop or mis-pair them. This preserves every
     slur event in document order and only changes the number on overlapping
     starts and their matching stops.
@@ -532,38 +658,43 @@ def normalize_slur_numbers(root: ET.Element) -> int:
 
 def remove_spurious_page_break_measures(root: ET.Element) -> int:
     """
-    Drop isolated HOMR fragments inserted before a page-leading new system.
+    Drop isolated homr fragments inserted around page-leading systems.
 
-    The Guitar, Loneliness and Blue Planet score can produce a fake one-measure
-    system at a page/section boundary: the previous measure closes a section,
-    the fragment has only a single-staff pickup-like upper line plus lower-staff
-    whole rest, and the next measure restarts the real page with ``new-system``
-    and its own key signature. Removing only this narrow shape avoids rewriting
-    ordinary musical content.
+    homr can produce a fake one-measure system at a page/section boundary: the
+    previous measure closes a section, the fragment has only a single-staff
+    pickup-like upper line plus lower-staff whole rest, and the next measure
+    restarts the real page with ``new-system`` and its own key signature. It can
+    also produce a page-leading one-rest fragment with a conflicting key
+    signature and final bar before the real first system. Removing only these
+    narrow shapes avoids rewriting ordinary musical content.
     """
     removed_measures = 0
-    section_bar_styles = {"light-light", "light-heavy", "heavy-heavy"}
 
     for part in root.findall("./part"):
         measures = part.findall("./measure")
-        for index in range(len(measures) - 2, 0, -1):
-            previous_measure = measures[index - 1]
+        for index in range(len(measures) - 1, -1, -1):
             measure = measures[index]
-            next_measure = measures[index + 1]
+            next_measure = measures[index + 1] if index + 1 < len(measures) else None
+            previous_measure = measures[index - 1] if index else None
+            is_fragment = False
 
-            if next_measure.find("./print[@new-system='yes']") is None:
-                continue
-            if measure.find("./print") is not None:
-                continue
-            if measure.find("./attributes/key") is None:
-                continue
-            if next_measure.find("./attributes/key") is None:
-                continue
-            if right_bar_style(previous_measure) not in section_bar_styles:
-                continue
-            if right_bar_style(measure) not in section_bar_styles:
-                continue
-            if not is_staff_rest_only(measure, "2"):
+            if next_measure is not None and is_page_leading_rest_fragment(
+                measure,
+                next_measure,
+            ):
+                is_fragment = True
+            elif (
+                previous_measure is not None
+                and next_measure is not None
+                and is_section_bridge_fragment(
+                    previous_measure,
+                    measure,
+                    next_measure,
+                )
+            ):
+                is_fragment = True
+
+            if not is_fragment:
                 continue
 
             part.remove(measure)
@@ -577,9 +708,9 @@ def normalize_measure_streams(
     expected_duration: int,
 ) -> bool:
     """
-    Rebuild interleaved HOMR staff streams when each stream is already complete.
+    Rebuild interleaved homr staff streams when each stream is already complete.
 
-    HOMR sometimes emits correct upper and lower staves with backups at the
+    homr sometimes emits correct upper and lower staves with backups at the
     wrong interleaving points. Grouping each staff/voice stream and inserting
     one full-measure backup preserves every note and its notation.
     """
@@ -634,7 +765,7 @@ def normalize_measure_streams(
 
 def normalize_musicxml_timing(root: ET.Element) -> tuple[int, int]:
     """
-    Repair safe HOMR timing errors and mark a genuine irregular final measure.
+    Repair safe homr timing errors and mark a genuine irregular final measure.
 
     Returns:
         Counts of reordered measures and irregular final measures.
@@ -824,6 +955,10 @@ def convert_pdf(args: argparse.Namespace) -> Path:
         title=cast(str | None, args.title) or detected_metadata.title,
         composer=cast(str | None, args.composer) or detected_metadata.composer,
     )
+    explicit_tempo = cast(int | None, args.tempo)
+    score_tempo = explicit_tempo or detect_score_tempo(input_pdf)
+    if explicit_tempo is None and score_tempo is not None:
+        log(f"Detected tempo: {score_tempo}")
 
     if output_path.exists() and not args.overwrite:
         raise ConversionError(
@@ -844,7 +979,7 @@ def convert_pdf(args: argparse.Namespace) -> Path:
             cache=args.cache,
             large_page=args.large_page,
             metronome=args.metronome,
-            tempo=args.tempo,
+            tempo=explicit_tempo,
         )
 
         temporary_output = temporary_path / "combined.musicxml"
@@ -853,7 +988,7 @@ def convert_pdf(args: argparse.Namespace) -> Path:
             page_outputs,
             temporary_output,
             metadata=score_metadata,
-            tempo=args.tempo,
+            tempo=score_tempo,
         )
         os.replace(temporary_output, output_path)
 
@@ -874,9 +1009,9 @@ def positive_integer(value: str) -> int:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """Parse command-line options while preserving HOMR option names."""
+    """Parse command-line options while preserving homr option names."""
     parser = argparse.ArgumentParser(
-        description="Convert a PDF score to MusicXML with HOMR."
+        description="Convert a PDF score to MusicXML with homr."
     )
     parser.add_argument("input_pdf", type=Path)
     parser.add_argument("-o", "--output", type=Path)
