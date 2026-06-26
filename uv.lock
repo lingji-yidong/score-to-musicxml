@@ -107,8 +107,8 @@ wheels = [
 
 [[package]]
 name = "homr"
-version = "0.6.2.post56+6530038"
-source = { git = "https://github.com/liebharc/homr.git?rev=6530038#6530038beb2a369c0b67a387bd9264c3dc2f8df4" }
+version = "0.6.2.post61+fabab4b"
+source = { git = "https://github.com/liebharc/homr.git?rev=fabab4b0f8480be20d13686edf5f91d913ab00fd#fabab4b0f8480be20d13686edf5f91d913ab00fd" }
 dependencies = [
     { name = "musicxml" },
     { name = "numpy" },
@@ -599,7 +599,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "homr", git = "https://github.com/liebharc/homr.git?rev=6530038" },
+    { name = "homr", git = "https://github.com/liebharc/homr.git?rev=fabab4b0f8480be20d13686edf5f91d913ab00fd" },
     { name = "onnxruntime", specifier = "==1.23.2" },
     { name = "opencv-python-headless", specifier = "==4.13.0.92" },
     { name = "pymupdf", specifier = ">=1.26,<2" },

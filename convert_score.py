@@ -449,6 +449,129 @@ def measure_has_invalid_cursor(
     )
 
 
+def right_bar_style(measure: ET.Element) -> str | None:
+    """Return the right barline style when one is present."""
+    return measure.findtext("./barline[@location='right']/bar-style")
+
+
+def is_staff_rest_only(measure: ET.Element, staff_number: str) -> bool:
+    """Return whether a staff contains only rests in the measure."""
+    staff_notes = [
+        note
+        for note in measure.findall("./note")
+        if note.findtext("./staff") == staff_number
+    ]
+    return bool(staff_notes) and all(
+        note.find("./rest") is not None for note in staff_notes
+    )
+
+
+def free_slur_number(active_numbers: set[str]) -> str | None:
+    """Return an available MusicXML slur number."""
+    for number in range(1, 7):
+        candidate = str(number)
+        if candidate not in active_numbers:
+            return candidate
+    return None
+
+
+def normalize_slur_numbers(root: ET.Element) -> int:
+    """
+    Renumber nested slurs that HOMR emits with the same MusicXML number.
+
+    MusicXML renderers use the ``number`` attribute to pair simultaneous slurs.
+    HOMR often emits nested phrase and local slurs as ``number="1"`` on the
+    same staff, so a renderer may drop or mis-pair them. This preserves every
+    slur event in document order and only changes the number on overlapping
+    starts and their matching stops.
+    """
+    changed_slurs = 0
+
+    for part in root.findall("./part"):
+        active_numbers_by_staff: dict[str, set[str]] = {}
+        slur_stacks: dict[tuple[str, str], list[str]] = {}
+
+        for measure in part.findall("./measure"):
+            for note in measure.findall("./note"):
+                staff = note.findtext("./staff", "1")
+                active_numbers = active_numbers_by_staff.setdefault(staff, set())
+                slurs = note.findall("./notations/slur")
+
+                for slur in [
+                    candidate for candidate in slurs if candidate.get("type") == "stop"
+                ]:
+                    source_number = slur.get("number", "1")
+                    stack = slur_stacks.setdefault((staff, source_number), [])
+                    if not stack:
+                        continue
+                    actual_number = stack.pop()
+                    active_numbers.discard(actual_number)
+                    if actual_number != source_number:
+                        slur.set("number", actual_number)
+                        changed_slurs += 1
+
+                for slur in [
+                    candidate for candidate in slurs if candidate.get("type") == "start"
+                ]:
+                    source_number = slur.get("number", "1")
+                    actual_number = source_number
+                    if source_number in active_numbers:
+                        replacement = free_slur_number(active_numbers)
+                        if replacement is None:
+                            continue
+                        actual_number = replacement
+                        slur.set("number", actual_number)
+                        changed_slurs += 1
+
+                    active_numbers.add(actual_number)
+                    stack = slur_stacks.setdefault((staff, source_number), [])
+                    stack.append(actual_number)
+
+    return changed_slurs
+
+
+def remove_spurious_page_break_measures(root: ET.Element) -> int:
+    """
+    Drop isolated HOMR fragments inserted before a page-leading new system.
+
+    The Guitar, Loneliness and Blue Planet score can produce a fake one-measure
+    system at a page/section boundary: the previous measure closes a section,
+    the fragment has only a single-staff pickup-like upper line plus lower-staff
+    whole rest, and the next measure restarts the real page with ``new-system``
+    and its own key signature. Removing only this narrow shape avoids rewriting
+    ordinary musical content.
+    """
+    removed_measures = 0
+    section_bar_styles = {"light-light", "light-heavy", "heavy-heavy"}
+
+    for part in root.findall("./part"):
+        measures = part.findall("./measure")
+        for index in range(len(measures) - 2, 0, -1):
+            previous_measure = measures[index - 1]
+            measure = measures[index]
+            next_measure = measures[index + 1]
+
+            if next_measure.find("./print[@new-system='yes']") is None:
+                continue
+            if measure.find("./print") is not None:
+                continue
+            if measure.find("./attributes/key") is None:
+                continue
+            if next_measure.find("./attributes/key") is None:
+                continue
+            if right_bar_style(previous_measure) not in section_bar_styles:
+                continue
+            if right_bar_style(measure) not in section_bar_styles:
+                continue
+            if not is_staff_rest_only(measure, "2"):
+                continue
+
+            part.remove(measure)
+            removed_measures += 1
+
+    return removed_measures
+
+
 def normalize_measure_streams(
     measure: ET.Element,
     expected_duration: int,
@@ -655,11 +778,24 @@ def merge_musicxml_pages(  # noqa: PLR0912
     if updated_parts:
         log(f"Added explicit staff-count declarations to {updated_parts} part(s)")
 
+    removed_break_measures = remove_spurious_page_break_measures(root)
+    if removed_break_measures:
+        log(f"Removed {removed_break_measures} spurious page-break measure(s)")
+        for part in combined_parts:
+            for measure_number, measure in enumerate(
+                part.findall("./measure"),
+                start=1,
+            ):
+                measure.set("number", str(measure_number))
+
     reordered_measures, irregular_measures = normalize_musicxml_timing(root)
     if reordered_measures:
         log(f"Reordered {reordered_measures} interleaved measure stream(s)")
     if irregular_measures:
         log(f"Marked {irregular_measures} irregular final measure(s)")
+    renumbered_slurs = normalize_slur_numbers(root)
+    if renumbered_slurs:
+        log(f"Renumbered {renumbered_slurs} nested slur event(s)")
 
     if not root.findall(".//note"):
         raise ConversionError("Merged MusicXML does not contain any notes")

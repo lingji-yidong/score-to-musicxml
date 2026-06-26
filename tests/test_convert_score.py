@@ -17,6 +17,8 @@ from convert_score import (
     is_low_ink_page,
     merge_musicxml_pages,
     normalize_musicxml_timing,
+    normalize_slur_numbers,
+    remove_spurious_page_break_measures,
     render_pdf_pages,
     validate_matching_parts,
 )
@@ -353,3 +355,73 @@ def test_normalize_musicxml_timing_marks_short_section_ending_implicit() -> None
     assert irregular == 1
     assert measures[0].get("implicit") == "yes"
     assert measures[1].get("implicit") is None
+
+
+def test_remove_spurious_page_break_measures_drops_guitar_fragment() -> None:
+    """Remove an isolated false system before a real page-leading key change."""
+    root = ET.fromstring(  # noqa: S314
+        """<score-partwise><part id="P1">
+        <measure number="149">
+        <note><rest/><duration>8</duration><voice>5</voice><staff>2</staff></note>
+        <barline location="right"><bar-style>light-light</bar-style></barline>
+        </measure>
+        <measure number="150">
+        <attributes><key><fifths>0</fifths></key></attributes>
+        <note><rest/><duration>8</duration><voice>5</voice><staff>2</staff></note>
+        <backup><duration>8</duration></backup>
+        <note><pitch><step>B</step><alter>-1</alter><octave>5</octave></pitch>
+        <duration>2</duration><voice>1</voice><staff>1</staff></note>
+        <barline location="right"><bar-style>light-light</bar-style></barline>
+        </measure>
+        <measure number="151">
+        <print new-system="yes"/>
+        <attributes><key><fifths>-2</fifths></key></attributes>
+        <note><pitch><step>F</step><octave>6</octave></pitch>
+        <duration>1</duration><voice>1</voice><staff>1</staff></note>
+        </measure>
+        </part></score-partwise>"""
+    )
+
+    removed = remove_spurious_page_break_measures(root)
+
+    measures = root.findall("./part/measure")
+    assert removed == 1
+    assert [measure.get("number") for measure in measures] == ["149", "151"]
+    assert measures[1].find("./print[@new-system='yes']") is not None
+
+
+def test_normalize_slur_numbers_renumbers_nested_same_staff_slurs() -> None:
+    """Keep nested phrase and local slurs from sharing one MusicXML number."""
+    root = ET.fromstring(  # noqa: S314
+        """<score-partwise><part id="P1">
+        <measure number="18">
+        <note><pitch><step>G</step><octave>4</octave></pitch>
+        <duration>1</duration><staff>1</staff>
+        <notations><slur type="start" number="1"/></notations></note>
+        </measure>
+        <measure number="19">
+        <note><pitch><step>D</step><octave>5</octave></pitch>
+        <duration>1</duration><staff>1</staff>
+        <notations><slur type="start" number="1"/></notations></note>
+        <note><pitch><step>D</step><octave>5</octave></pitch>
+        <duration>1</duration><staff>1</staff>
+        <notations><slur type="stop" number="1"/></notations></note>
+        </measure>
+        <measure number="20">
+        <note><pitch><step>D</step><octave>5</octave></pitch>
+        <duration>1</duration><staff>1</staff>
+        <notations><slur type="stop" number="1"/></notations></note>
+        </measure>
+        </part></score-partwise>"""
+    )
+
+    changed = normalize_slur_numbers(root)
+
+    slurs = root.findall(".//slur")
+    assert changed == 2
+    assert [(slur.get("type"), slur.get("number")) for slur in slurs] == [
+        ("start", "1"),
+        ("start", "2"),
+        ("stop", "2"),
+        ("stop", "1"),
+    ]
