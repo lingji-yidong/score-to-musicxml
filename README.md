@@ -93,9 +93,21 @@ uv sync --reinstall-package opencv-python-headless
 
 See [CITATIONS.md](CITATIONS.md) for upstream projects and licenses.
 
+## Citation
+
+This project follows the citation guidance from
+[homr](https://github.com/liebharc/homr). If you use this project in research,
+please also cite [oemer](https://github.com/BreezeWhite/oemer) and
+[Polyphonic-TrOMR](https://github.com/NetEase/Polyphonic-TrOMR).
+
 ## Thanks
 
 This project builds upon previous work, including:
 
 - The Optical Music Recognition pipeline of [homr](https://github.com/liebharc/homr)
+- The segmentation models of [oemer](https://github.com/BreezeWhite/oemer)
+- The transformer model of
+  [Polyphonic-TrOMR](https://github.com/NetEase/Polyphonic-TrOMR)
+- The starter template provided by
+  [Benjamin Roland](https://github.com/Parici75/python-poetry-bootstrap)
 - The PDF rendering library [PyMuPDF](https://github.com/pymupdf/PyMuPDF)
