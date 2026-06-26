@@ -6,23 +6,26 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from convert_score import (
-    ConversionError,
+from score_to_musicxml.errors import ConversionError
+from score_to_musicxml.metadata import (
     ScoreMetadata,
-    apply_playback_tempo,
     apply_score_metadata,
     composer_from_homr_title,
     detect_score_metadata,
-    ensure_staves_declarations,
-    is_low_ink_page,
+    tempo_from_text,
+)
+from score_to_musicxml.musicxml.merge import (
     merge_musicxml_pages,
+    validate_matching_parts,
+)
+from score_to_musicxml.musicxml.rules import (
+    apply_playback_tempo,
+    ensure_staves_declarations,
     normalize_musicxml_timing,
     normalize_slur_numbers,
     remove_spurious_page_break_measures,
-    render_pdf_pages,
-    tempo_from_text,
-    validate_matching_parts,
 )
+from score_to_musicxml.pdf import is_low_ink_page, render_pdf_pages
 
 
 def test_render_pdf_pages_uses_stable_names(tmp_path: Path) -> None:

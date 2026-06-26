@@ -9,9 +9,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from convert_score import (
+from score_to_musicxml.metadata import (
     ScoreMetadata,
     apply_score_metadata,
+)
+from score_to_musicxml.musicxml.rules import (
     normalize_musicxml_timing,
     normalize_slur_numbers,
     remove_spurious_page_break_measures,
