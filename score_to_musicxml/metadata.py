@@ -108,8 +108,12 @@ def tempo_from_pdf_text(pdf_path: Path) -> int | None:
     """Detect tempo from an embedded PDF text layer when one is available."""
     try:
         with pymupdf.open(pdf_path) as document:  # type: ignore[no-untyped-call]
-            for page in document:
-                tempo = tempo_from_text(page.get_text("text"))
+            for page_index in range(document.page_count):
+                page = document[page_index]
+                page_text = page.get_text("text")
+                if not isinstance(page_text, str):
+                    continue
+                tempo = tempo_from_text(page_text)
                 if tempo is not None:
                     return tempo
     except (OSError, RuntimeError, ValueError):

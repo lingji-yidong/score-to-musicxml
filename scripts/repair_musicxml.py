@@ -17,6 +17,7 @@ from score_to_musicxml.musicxml.rules import (
     normalize_musicxml_timing,
     normalize_slur_numbers,
     remove_spurious_page_break_measures,
+    repair_time_signatures_from_streams,
 )
 
 
@@ -39,6 +40,7 @@ def main() -> None:
                 start=1,
             ):
                 measure.set("number", str(measure_number))
+    repaired_time_signatures = repair_time_signatures_from_streams(tree.getroot())
     reordered, irregular = normalize_musicxml_timing(tree.getroot())
     renumbered = normalize_slur_numbers(tree.getroot())
     apply_score_metadata(
@@ -49,6 +51,7 @@ def main() -> None:
     tree.write(output_path, encoding="utf-8", xml_declaration=True)
     print(
         f"Removed {removed} spurious page-break measure(s); "
+        f"repaired {repaired_time_signatures} time signature(s); "
         f"reordered {reordered} measure(s); "
         f"marked {irregular} irregular final measure(s); "
         f"renumbered {renumbered} nested slur event(s)"

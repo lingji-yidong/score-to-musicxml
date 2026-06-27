@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import pymupdf
@@ -47,7 +48,9 @@ def render_pdf_pages(pdf_path: Path, output_dir: Path, dpi: int) -> list[Path]:
 
             page_digits = max(3, len(str(document.page_count)))
             page_paths: list[Path] = []
-            for page_number, page in enumerate(document, start=1):
+            for page_index in range(document.page_count):
+                page_number = page_index + 1
+                page = document[page_index]
                 page_path = output_dir / f"page-{page_number:0{page_digits}d}.png"
                 page.get_pixmap(matrix=transform, alpha=False).save(page_path)
                 page_paths.append(page_path)
@@ -67,6 +70,8 @@ def is_low_ink_page(page_path: Path) -> bool:
     """
     pixmap = pymupdf.Pixmap(page_path)  # type: ignore[no-untyped-call]
     white_ratio, dominant_color = pixmap.color_topusage()  # type: ignore[no-untyped-call]
+    if not isinstance(dominant_color, Sequence):
+        return False
     return white_ratio >= LOW_INK_WHITE_RATIO and all(
-        channel >= 250 for channel in dominant_color
+        isinstance(channel, int) and channel >= 250 for channel in dominant_color
     )

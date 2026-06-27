@@ -18,6 +18,7 @@ from score_to_musicxml.musicxml.rules import (
     normalize_musicxml_timing,
     normalize_slur_numbers,
     remove_spurious_page_break_measures,
+    repair_time_signatures_from_streams,
 )
 from score_to_musicxml.progress import log
 
@@ -112,6 +113,10 @@ def merge_musicxml_pages(  # noqa: PLR0912
     if removed_break_measures:
         log(f"Removed {removed_break_measures} spurious page-break measure(s)")
         renumber_measures(combined_parts)
+
+    repaired_time_signatures = repair_time_signatures_from_streams(root)
+    if repaired_time_signatures:
+        log(f"Repaired {repaired_time_signatures} inferred time signature(s)")
 
     reordered_measures, irregular_measures = normalize_musicxml_timing(root)
     if reordered_measures:

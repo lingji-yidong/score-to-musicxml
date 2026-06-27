@@ -70,6 +70,20 @@ def note_duration(note: ET.Element) -> int:
     return int(duration_text) if duration_text is not None else 0
 
 
+def stream_durations_by_key(measure: ET.Element) -> dict[tuple[str, str], int]:
+    """Return non-chord note durations grouped by staff and voice."""
+    stream_durations: dict[tuple[str, str], int] = {}
+    for note in measure.findall("./note"):
+        if note.find("./chord") is not None:
+            continue
+        stream_key = note_stream_key(note)
+        stream_durations[stream_key] = stream_durations.get(
+            stream_key,
+            0,
+        ) + note_duration(note)
+    return stream_durations
+
+
 def measure_duration(
     divisions: int,
     beats: int,
@@ -78,6 +92,131 @@ def measure_duration(
     """Return the expected measure duration in MusicXML division units."""
     duration = Fraction(divisions * beats * 4, beat_type)
     return duration.numerator if duration.denominator == 1 else None
+
+
+def inferred_quarter_time_signature(
+    stream_durations: dict[tuple[str, str], int],
+    divisions: int,
+) -> tuple[int, int] | None:
+    """Infer common quarter-note time signatures from complete staff streams."""
+    positive_durations = {
+        duration for duration in stream_durations.values() if duration > 0
+    }
+    if len(positive_durations) != 1:
+        return None
+
+    duration = positive_durations.pop()
+    if duration == divisions * 3:
+        return (3, 4)
+    if duration == divisions * 4:
+        return (4, 4)
+    return None
+
+
+def measure_time_signature(measure: ET.Element) -> tuple[int, int] | None:
+    """Return a measure's explicit time signature when present."""
+    time_signature: tuple[int, int] | None = None
+    for attributes in measure.findall("./attributes"):
+        beats_text = attributes.findtext("./time/beats")
+        beat_type_text = attributes.findtext("./time/beat-type")
+        if beats_text is not None and beat_type_text is not None:
+            time_signature = (int(beats_text), int(beat_type_text))
+    return time_signature
+
+
+def measure_attributes(measure: ET.Element) -> ET.Element:
+    """Return the measure attributes element, creating it before notes."""
+    attributes = measure.find("./attributes")
+    if attributes is not None:
+        return attributes
+
+    attributes = ET.Element("attributes")
+    insertion_index = 0
+    while insertion_index < len(measure) and measure[insertion_index].tag == "print":
+        insertion_index += 1
+    measure.insert(insertion_index, attributes)
+    return attributes
+
+
+def set_measure_time_signature(
+    measure: ET.Element,
+    beats: int,
+    beat_type: int,
+) -> None:
+    """Write a measure time signature without changing other attributes."""
+    time_elements = [
+        time
+        for attributes in measure.findall("./attributes")
+        for time in attributes.findall("./time")
+    ]
+    if not time_elements:
+        time_elements = [ET.SubElement(measure_attributes(measure), "time")]
+
+    for time in time_elements:
+        beats_element = time.find("./beats")
+        if beats_element is None:
+            beats_element = ET.SubElement(time, "beats")
+        beats_element.text = str(beats)
+
+        beat_type_element = time.find("./beat-type")
+        if beat_type_element is None:
+            beat_type_element = ET.SubElement(time, "beat-type")
+        beat_type_element.text = str(beat_type)
+
+
+def repair_time_signatures_from_streams(root: ET.Element) -> int:
+    """
+    Repair missing or wrong 3/4 and 4/4 signatures from complete streams.
+
+    homr can emit an incomplete time-signature token such as ``/4`` or miss the
+    visible 4/4-to-3/4 change. When all non-chord streams in a measure agree on
+    a common quarter-note duration, that duration is a safer source for these
+    ordinary signatures than the broken OCR token.
+    """
+    repaired_measures = 0
+
+    for part in root.findall("./part"):
+        divisions = 1
+        measures = part.findall("./measure")
+        inferred_times: list[tuple[int, int] | None] = []
+
+        for measure in measures:
+            attributes = measure.find("./attributes")
+            if attributes is not None:
+                divisions_text = attributes.findtext("./divisions")
+                if divisions_text is not None:
+                    divisions = int(divisions_text)
+            inferred_times.append(
+                inferred_quarter_time_signature(
+                    stream_durations_by_key(measure),
+                    divisions,
+                )
+            )
+
+        current_time = (4, 4)
+        for index, measure in enumerate(measures):
+            declared_time = measure_time_signature(measure)
+            inferred_time = inferred_times[index]
+            if declared_time is not None:
+                current_time = declared_time
+
+            if inferred_time is None or inferred_time == current_time:
+                continue
+
+            next_inferred_time = (
+                inferred_times[index + 1] if index + 1 < len(inferred_times) else None
+            )
+            should_repair = (
+                declared_time is not None or next_inferred_time == inferred_time
+            )
+            if not should_repair:
+                continue
+
+            set_measure_time_signature(measure, *inferred_time)
+            current_time = inferred_time
+            repaired_measures += 1
+
+    return repaired_measures
 
 
 def measure_has_invalid_cursor(
@@ -306,8 +445,13 @@ def normalize_measure_streams(
     first_temporal = temporal_indexes[0]
     last_temporal = temporal_indexes[-1]
     temporal_span = children[first_temporal : last_temporal + 1]
-    if any(child.tag not in {"note", "backup"} for child in temporal_span):
+    if any(child.tag not in {"note", "backup", "forward"} for child in temporal_span):
         return False
+    for index, child in enumerate(temporal_span):
+        if child.tag != "forward":
+            continue
+        if index + 1 < len(temporal_span) and temporal_span[index + 1].tag != "backup":
+            return False
 
     streams: dict[tuple[str, str], list[ET.Element]] = {}
     stream_durations: dict[tuple[str, str], int] = {}
@@ -384,15 +528,7 @@ def normalize_musicxml_timing(root: ET.Element) -> tuple[int, int]:
                 reordered_measures += 1
                 continue
 
-            stream_durations: dict[tuple[str, str], int] = {}
-            for note in measure.findall("./note"):
-                if note.find("./chord") is not None:
-                    continue
-                stream_key = note_stream_key(note)
-                stream_durations[stream_key] = stream_durations.get(
-                    stream_key, 0
-                ) + note_duration(note)
-
+            stream_durations = stream_durations_by_key(measure)
             final_barline = measure.find("./barline[@location='right']/bar-style")
             has_final_barline = final_barline is not None and final_barline.text in {
                 "light-heavy",

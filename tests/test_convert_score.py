@@ -24,6 +24,7 @@ from score_to_musicxml.musicxml.rules import (
     normalize_musicxml_timing,
     normalize_slur_numbers,
     remove_spurious_page_break_measures,
+    repair_time_signatures_from_streams,
 )
 from score_to_musicxml.pdf import is_low_ink_page, render_pdf_pages
 
@@ -350,6 +351,52 @@ def test_normalize_musicxml_timing_pads_short_secondary_voice() -> None:
     assert irregular == 0
     assert measure.findtext("./forward/duration") == "6"
     assert len(measure.findall("./note")) == 3
+
+
+def test_repair_time_signatures_handles_four_four_to_three_four_change() -> None:
+    """Infer a missed 4/4 opening and later 3/4 change from complete streams."""
+    root = ET.fromstring(  # noqa: S314
+        """<score-partwise><part id="P1">
+        <measure number="1">
+        <attributes><divisions>2</divisions>
+        <time><beats>3</beats><beat-type>4</beat-type></time></attributes>
+        <note><rest/><duration>8</duration><voice>1</voice><staff>1</staff></note>
+        <backup><duration>8</duration></backup>
+        <note><rest/><duration>8</duration><voice>5</voice><staff>2</staff></note>
+        </measure>
+        <measure number="2">
+        <note><rest/><duration>8</duration><voice>1</voice><staff>1</staff></note>
+        <backup><duration>8</duration></backup>
+        <note><rest/><duration>8</duration><voice>5</voice><staff>2</staff></note>
+        </measure>
+        <measure number="3">
+        <note><rest/><duration>6</duration><voice>1</voice><staff>1</staff></note>
+        <forward><duration>2</duration></forward>
+        <backup><duration>8</duration></backup>
+        <note><rest/><duration>6</duration><voice>5</voice><staff>2</staff></note>
+        <forward><duration>2</duration></forward>
+        </measure>
+        <measure number="4">
+        <note><rest/><duration>6</duration><voice>1</voice><staff>1</staff></note>
+        <forward><duration>2</duration></forward>
+        <backup><duration>8</duration></backup>
+        <note><rest/><duration>6</duration><voice>5</voice><staff>2</staff></note>
+        <forward><duration>2</duration></forward>
+        </measure>
+        </part></score-partwise>"""
+    )
+
+    repaired = repair_time_signatures_from_streams(root)
+    reordered, irregular = normalize_musicxml_timing(root)
+
+    measures = root.findall("./part/measure")
+    assert repaired == 2
+    assert reordered == 2
+    assert irregular == 0
+    assert measures[0].findtext("./attributes/time/beats") == "4"
+    assert measures[2].findtext("./attributes/time/beats") == "3"
+    assert measures[2].findtext("./backup/duration") == "6"
+    assert measures[2].find("./forward") is None
 
 
 def test_normalize_musicxml_timing_marks_short_section_ending_implicit() -> None:
